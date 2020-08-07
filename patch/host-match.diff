@@ -1,0 +1,225 @@
+diff --git a/includes/dhcpd.h b/includes/dhcpd.h
+index b20dd240..5c138377 100644
+--- a/includes/dhcpd.h
++++ b/includes/dhcpd.h
+@@ -988,6 +988,7 @@ struct host_decl {
+ 	   to use when trying to look up an option.  We store the
+ 	   value here. */
+ 	int relays;
++	struct permit *permit;
+ };
+ 
+ struct permit {
+@@ -3541,6 +3542,8 @@ int find_hosts_by_option(struct host_decl **, struct packet *,
+ int find_host_for_network (struct subnet **, struct host_decl **,
+ 			   struct iaddr *, struct shared_network *);
+ 
++int find_host_for_network_match (struct subnet **, struct host_decl **,
++			   struct iaddr *, struct shared_network *, struct packet *);
+ void new_address_range (struct parse *, struct iaddr, struct iaddr,
+ 			struct subnet *, struct pool *,
+ 			struct lease **);
+diff --git a/includes/site.h b/includes/site.h
+index 2ef69e41..22fcd5fb 100644
+--- a/includes/site.h
++++ b/includes/site.h
+@@ -127,11 +127,11 @@
+ 
+ /* Define this if you want DNS update functionality to be available. */
+ 
+-#define NSUPDATE
++/* #define NSUPDATE */
+ 
+ /* Define this if you want to enable the DHCP server attempting to
+    find a nameserver to use for DDNS updates. */
+-#define DNS_ZONE_LOOKUP
++/* #define DNS_ZONE_LOOKUP */
+ 
+ /* Define this if you want the dhcpd.pid file to go somewhere other than
+    the default (which varies from system to system, but is usually either
+diff --git a/server/confpars.c b/server/confpars.c
+index 4f0b58ee..21d1862b 100644
+--- a/server/confpars.c
++++ b/server/confpars.c
+@@ -2016,6 +2016,35 @@ void parse_host_declaration (cfile, group)
+ 				break;
+ 			continue;
+ 		}
++		if (token == MATCH) {
++			skip_token(&val, NULL, cfile);
++			if (next_token (&val, NULL, cfile) != IF) {
++				parse_warn (cfile, "expecting \"if\"");
++				skip_to_semi (cfile);
++	                } else if (next_token (&val, NULL, cfile) != STRING) {
++				parse_warn (cfile, "expecting class name.");
++				skip_to_semi (cfile);
++			} else {
++				struct permit *permit;
++				permit=new_permit(MDL);
++				if (!permit) {
++					log_fatal ("no memory for permit");
++				}
++				permit->type = permit_class;
++				permit->class = NULL;
++				find_class(&permit->class, val, MDL);
++		                if (!permit->class) {
++					parse_warn(cfile, "no such class: %s", val);
++					free_permit(permit,MDL);
++				} else {
++					host->permit=permit;
++				}
++			}
++			if (!parse_semi (cfile)) {
++				break;
++			}
++			continue;
++		}
+ 
+ 		if (token == GROUP) {
+ 			struct group_object *go;
+diff --git a/server/dhcp.c b/server/dhcp.c
+index 16a4f924..bff66f2c 100644
+--- a/server/dhcp.c
++++ b/server/dhcp.c
+@@ -4316,6 +4316,7 @@ int find_lease (struct lease **lp,
+ 	/* If fixed_lease is present but does not match the requested
+ 	   IP address, and this is a DHCPREQUEST, then we can't return
+ 	   any other lease, so we might as well return now. */
++	//if(0)
+ 	if (packet -> packet_type == DHCPREQUEST && fixed_lease &&
+ 	    (fixed_lease -> ip_addr.len != cip.len ||
+ 	     memcmp (fixed_lease -> ip_addr.iabuf,
+@@ -4943,11 +4944,14 @@ int mockup_lease (struct lease **lp, struct packet *packet,
+ 		lease_dereference (&lease, MDL);
+ 		return 0;
+ 	}
+-	if (!find_host_for_network (&lease -> subnet,
+-				    &rhp, &lease -> ip_addr, share)) {
+-		lease_dereference (&lease, MDL);
+-		host_dereference (&rhp, MDL);
+-		return 0;
++	if(!find_host_for_network_match (&lease -> subnet,
++                                    &rhp, &lease -> ip_addr, share, packet)) {
++		if (!find_host_for_network (&lease -> subnet,
++					    &rhp, &lease -> ip_addr, share)) {
++			lease_dereference (&lease, MDL);
++			host_dereference (&rhp, MDL);
++			return 0;
++		}
+ 	}
+ 	host_reference (&lease -> host, rhp, MDL);
+ 	if (rhp -> client_identifier.len > sizeof lease -> uid_buf)
+diff --git a/server/mdb.c b/server/mdb.c
+index ff8a707f..c44da4ca 100644
+--- a/server/mdb.c
++++ b/server/mdb.c
+@@ -739,12 +739,67 @@ int find_host_for_network (struct subnet **sp, struct host_decl **host,
+ 	struct iaddr ip_address;
+ 	struct host_decl *hp;
+ 	struct data_string fixed_addr;
++	memset (&fixed_addr, 0, sizeof fixed_addr);
++
++	for (hp = *host; hp; hp = hp -> n_ipaddr) {
++		if (!hp -> fixed_addr)
++			continue;
++		/* Skip hosts with "match if" stament */
++		if(hp->permit)
++			continue;
++		if (!evaluate_option_cache (&fixed_addr, (struct packet *)0,
++					    (struct lease *)0,
++					    (struct client_state *)0,
++					    (struct option_state *)0,
++					    (struct option_state *)0,
++					    &global_scope,
++					    hp -> fixed_addr, MDL))
++			continue;
++		for (i = 0; i < fixed_addr.len; i += 4) {
++			ip_address.len = 4;
++			memcpy (ip_address.iabuf,
++				fixed_addr.data + i, 4);
++			if (find_grouped_subnet (sp, share, ip_address, MDL)) {
++				struct host_decl *tmp = (struct host_decl *)0;
++				*addr = ip_address;
++				/* This is probably not necessary, but
++				   just in case *host is the only reference
++				   to that host declaration, make a temporary
++				   reference so that dereferencing it doesn't
++				   dereference hp out from under us. */
++				host_reference (&tmp, *host, MDL);
++				host_dereference (host, MDL);
++				host_reference (host, hp, MDL);
++				host_dereference (&tmp, MDL);
++				data_string_forget (&fixed_addr, MDL);
++				return 1;
++			}
++		}
++		data_string_forget (&fixed_addr, MDL);
++	}
++	return 0;
++}
++
++/* Same as above but also use match if condition to find host */
++int find_host_for_network_match (struct subnet **sp, struct host_decl **host,
++			   struct iaddr *addr, struct shared_network *share, struct packet *packet)
++{
++	int i;
++	struct iaddr ip_address;
++	struct host_decl *hp;
++	struct data_string fixed_addr;
++	struct permit *p;
++	int found_class;
+ 
+ 	memset (&fixed_addr, 0, sizeof fixed_addr);
+ 
+ 	for (hp = *host; hp; hp = hp -> n_ipaddr) {
+ 		if (!hp -> fixed_addr)
+ 			continue;
++		/* Skip hosts without "match if" stament */
++		if(!hp->permit)
++			continue;
++		p = hp->permit;
+ 		if (!evaluate_option_cache (&fixed_addr, (struct packet *)0,
+ 					    (struct lease *)0,
+ 					    (struct client_state *)0,
+@@ -753,6 +808,17 @@ int find_host_for_network (struct subnet **sp, struct host_decl **host,
+ 					    &global_scope,
+ 					    hp -> fixed_addr, MDL))
+ 			continue;
++		if(p->type != permit_class)
++			continue;
++		found_class=0;
++		for(i = 0; i < packet -> class_count; i++ ) {
++			if( p->class == packet -> classes[i]) {
++				found_class=1;
++				break;
++			}
++		}
++		if(!found_class)
++			continue;
+ 		for (i = 0; i < fixed_addr.len; i += 4) {
+ 			ip_address.len = 4;
+ 			memcpy (ip_address.iabuf,
+@@ -981,7 +1047,7 @@ subnet_inner_than(const struct subnet *subnet,
+ #endif
+ 	if (addr_eq(subnet_number(subnet->net, scan->netmask), scan->net) ||
+ 	    addr_eq(subnet_number(scan->net, subnet->netmask), subnet->net)) {
+-		char n1buf[sizeof("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255")];
++		/* char n1buf[sizeof("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255")]; */
+ 		int i, j;
+ 		for (i = 0; i < 128; i++)
+ 			if (subnet->netmask.iabuf[3 - (i >> 3)]
+@@ -991,12 +1057,12 @@ subnet_inner_than(const struct subnet *subnet,
+ 			if (scan->netmask.iabuf[3 - (j >> 3)] &
+ 			    (1 << (j & 7)))
+ 				break;
+-		if (warnp) {
++		/* if (warnp) {
+ 			strcpy(n1buf, piaddr(subnet->net));
+ 			log_error("Warning: subnet %s/%d overlaps subnet %s/%d",
+ 			      n1buf, 32 - i,
+ 			      piaddr(scan->net), 32 - j);
+-		}
++		} */
+ 		if (i < j)
+ 			return 1;
+ 	}

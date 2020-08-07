@@ -988,6 +988,7 @@ struct host_decl {
 	   to use when trying to look up an option.  We store the
 	   value here. */
 	int relays;
+	struct permit *permit;
 };
 
 struct permit {
@@ -3541,6 +3542,8 @@ int find_hosts_by_option(struct host_decl **, struct packet *,
 int find_host_for_network (struct subnet **, struct host_decl **,
 			   struct iaddr *, struct shared_network *);
 
+int find_host_for_network_match (struct subnet **, struct host_decl **,
+			   struct iaddr *, struct shared_network *, struct packet *);
 void new_address_range (struct parse *, struct iaddr, struct iaddr,
 			struct subnet *, struct pool *,
 			struct lease **);

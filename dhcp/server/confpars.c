@@ -2016,6 +2016,35 @@ void parse_host_declaration (cfile, group)
 				break;
 			continue;
 		}
+		if (token == MATCH) {
+			skip_token(&val, NULL, cfile);
+			if (next_token (&val, NULL, cfile) != IF) {
+				parse_warn (cfile, "expecting \"if\"");
+				skip_to_semi (cfile);
+	                } else if (next_token (&val, NULL, cfile) != STRING) {
+				parse_warn (cfile, "expecting class name.");
+				skip_to_semi (cfile);
+			} else {
+				struct permit *permit;
+				permit=new_permit(MDL);
+				if (!permit) {
+					log_fatal ("no memory for permit");
+				}
+				permit->type = permit_class;
+				permit->class = NULL;
+				find_class(&permit->class, val, MDL);
+		                if (!permit->class) {
+					parse_warn(cfile, "no such class: %s", val);
+					free_permit(permit,MDL);
+				} else {
+					host->permit=permit;
+				}
+			}
+			if (!parse_semi (cfile)) {
+				break;
+			}
+			continue;
+		}
 
 		if (token == GROUP) {
 			struct group_object *go;

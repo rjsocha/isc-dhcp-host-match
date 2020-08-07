@@ -4316,6 +4316,7 @@ int find_lease (struct lease **lp,
 	/* If fixed_lease is present but does not match the requested
 	   IP address, and this is a DHCPREQUEST, then we can't return
 	   any other lease, so we might as well return now. */
+	//if(0)
 	if (packet -> packet_type == DHCPREQUEST && fixed_lease &&
 	    (fixed_lease -> ip_addr.len != cip.len ||
 	     memcmp (fixed_lease -> ip_addr.iabuf,
@@ -4943,11 +4944,14 @@ int mockup_lease (struct lease **lp, struct packet *packet,
 		lease_dereference (&lease, MDL);
 		return 0;
 	}
-	if (!find_host_for_network (&lease -> subnet,
-				    &rhp, &lease -> ip_addr, share)) {
-		lease_dereference (&lease, MDL);
-		host_dereference (&rhp, MDL);
-		return 0;
+	if(!find_host_for_network_match (&lease -> subnet,
+                                    &rhp, &lease -> ip_addr, share, packet)) {
+		if (!find_host_for_network (&lease -> subnet,
+					    &rhp, &lease -> ip_addr, share)) {
+			lease_dereference (&lease, MDL);
+			host_dereference (&rhp, MDL);
+			return 0;
+		}
 	}
 	host_reference (&lease -> host, rhp, MDL);
 	if (rhp -> client_identifier.len > sizeof lease -> uid_buf)

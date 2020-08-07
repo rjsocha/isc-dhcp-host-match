@@ -739,11 +739,13 @@ int find_host_for_network (struct subnet **sp, struct host_decl **host,
 	struct iaddr ip_address;
 	struct host_decl *hp;
 	struct data_string fixed_addr;
-
 	memset (&fixed_addr, 0, sizeof fixed_addr);
 
 	for (hp = *host; hp; hp = hp -> n_ipaddr) {
 		if (!hp -> fixed_addr)
+			continue;
+		/* Skip hosts with "match if" stament */
+		if(hp->permit)
 			continue;
 		if (!evaluate_option_cache (&fixed_addr, (struct packet *)0,
 					    (struct lease *)0,
@@ -752,6 +754,70 @@ int find_host_for_network (struct subnet **sp, struct host_decl **host,
 					    (struct option_state *)0,
 					    &global_scope,
 					    hp -> fixed_addr, MDL))
+			continue;
+		for (i = 0; i < fixed_addr.len; i += 4) {
+			ip_address.len = 4;
+			memcpy (ip_address.iabuf,
+				fixed_addr.data + i, 4);
+			if (find_grouped_subnet (sp, share, ip_address, MDL)) {
+				struct host_decl *tmp = (struct host_decl *)0;
+				*addr = ip_address;
+				/* This is probably not necessary, but
+				   just in case *host is the only reference
+				   to that host declaration, make a temporary
+				   reference so that dereferencing it doesn't
+				   dereference hp out from under us. */
+				host_reference (&tmp, *host, MDL);
+				host_dereference (host, MDL);
+				host_reference (host, hp, MDL);
+				host_dereference (&tmp, MDL);
+				data_string_forget (&fixed_addr, MDL);
+				return 1;
+			}
+		}
+		data_string_forget (&fixed_addr, MDL);
+	}
+	return 0;
+}
+
+/* Same as above but also use match if condition to find host */
+int find_host_for_network_match (struct subnet **sp, struct host_decl **host,
+			   struct iaddr *addr, struct shared_network *share, struct packet *packet)
+{
+	int i;
+	struct iaddr ip_address;
+	struct host_decl *hp;
+	struct data_string fixed_addr;
+	struct permit *p;
+	int found_class;
+
+	memset (&fixed_addr, 0, sizeof fixed_addr);
+
+	for (hp = *host; hp; hp = hp -> n_ipaddr) {
+		if (!hp -> fixed_addr)
+			continue;
+		/* Skip hosts without "match if" stament */
+		if(!hp->permit)
+			continue;
+		p = hp->permit;
+		if (!evaluate_option_cache (&fixed_addr, (struct packet *)0,
+					    (struct lease *)0,
+					    (struct client_state *)0,
+					    (struct option_state *)0,
+					    (struct option_state *)0,
+					    &global_scope,
+					    hp -> fixed_addr, MDL))
+			continue;
+		if(p->type != permit_class)
+			continue;
+		found_class=0;
+		for(i = 0; i < packet -> class_count; i++ ) {
+			if( p->class == packet -> classes[i]) {
+				found_class=1;
+				break;
+			}
+		}
+		if(!found_class)
 			continue;
 		for (i = 0; i < fixed_addr.len; i += 4) {
 			ip_address.len = 4;
@@ -981,7 +1047,7 @@ subnet_inner_than(const struct subnet *subnet,
 #endif
 	if (addr_eq(subnet_number(subnet->net, scan->netmask), scan->net) ||
 	    addr_eq(subnet_number(scan->net, subnet->netmask), subnet->net)) {
-		char n1buf[sizeof("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255")];
+		/* char n1buf[sizeof("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255")]; */
 		int i, j;
 		for (i = 0; i < 128; i++)
 			if (subnet->netmask.iabuf[3 - (i >> 3)]
@@ -991,12 +1057,12 @@ subnet_inner_than(const struct subnet *subnet,
 			if (scan->netmask.iabuf[3 - (j >> 3)] &
 			    (1 << (j & 7)))
 				break;
-		if (warnp) {
+		/* if (warnp) {
 			strcpy(n1buf, piaddr(subnet->net));
 			log_error("Warning: subnet %s/%d overlaps subnet %s/%d",
 			      n1buf, 32 - i,
 			      piaddr(scan->net), 32 - j);
-		}
+		} */
 		if (i < j)
 			return 1;
 	}
