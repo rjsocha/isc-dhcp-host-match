@@ -53,3 +53,7 @@ host N000c290e741d {
 ```
 
 Full example in etc/dhcpd.conf
+
+```
+./configure --prefix=/usr/local --with-randomdev=/dev/urandom --with-srv-conf-file=/etc/dhcp/dhcpd.conf --with-srv-lease-file=/var/lib/dhcp/dhcpd.leases --with-srv-pid-file=/run/dhcpd.pid --disable-dhcpv6 --disable-tracing --disable-failover 
+```
