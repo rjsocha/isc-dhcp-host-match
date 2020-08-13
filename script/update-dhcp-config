@@ -141,7 +141,7 @@ main() {
     _HOSTFILE="${DHCP_HOST}/$(cache_level $CLVL ${_MAC}).host"
     _MACNAME="${_MAC//:/}"
     mkdir -p "$(dirname ${_HOSTFILE})" || true
-    echo -n "${_HOSTFILE}"
+    echo "${_HOSTFILE}"
     exec >"${_HOSTFILE}"
     if [[ $? -ne 0 ]]
     then
