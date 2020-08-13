@@ -1,0 +1,262 @@
+#!/bin/bash
+
+DHCP_HOST="/etc/dhcp/host"
+
+# mac:
+# ip:
+# gw:
+# cidr:
+# boot-subnet:
+# boot-file:
+
+main() {
+    while [[ $# -ne 0 ]]
+    do
+        if [[ ${1^^} =~ ^MAC: ]]
+        then
+            _MAC="${1:4}"
+            _MAC="${_MAC^^}"
+        elif [[ ${1^^} =~ ^IP: ]]
+        then
+            _IP="${1:3}"
+        elif [[ ${1^^} =~ ^GW: ]]
+        then
+            _GW="${1:3}"
+        elif [[ ${1^^} =~ ^CIDR: ]]
+        then
+            _CIDR="${1:5}"
+        elif [[ ${1^^} =~ ^BOOT-SUBNET: ]]
+        then
+            _BOOTSUBNET="${1:12}"
+        elif [[ ${1^^} =~ ^BOOT-FILE: ]]
+        then
+            _BOOTFILE="${1:10}"
+        elif [[ ${1^^} =~ ^BOOT-SERVER: ]]
+        then
+            _BOOTSERVER="${1:12}"
+        else
+            perror "Unknow option: $1"
+            exit 10
+        fi
+        shift
+    done
+    
+    if [[ -z ${_BOOTSERVER} ]]
+    then
+        _BOOTSERVER="100.100.100.69"
+    fi
+    # Check everything :)
+    if [[ -z "$_MAC" ]]
+    then
+        perror "MAC address is required"
+        exit 1
+    fi
+    if [[ -z "$_IP" ]]
+    then
+        perror "IP address is required"
+        exit 1
+    fi
+    if [[ -z "$_GW" ]]
+    then
+        perror "GW address is required"
+        exit 1
+    fi
+    if [[ -z "$_CIDR" ]]
+    then
+        perror "CIDR/PREFIX is required"
+        exit 1
+    fi
+    if [[ -z "$_BOOTSUBNET" ]]
+    then
+        perror "BOOT-SUBNET is required"
+        exit 1
+    fi
+
+    if ! is_mac "$_MAC"
+    then
+        perror "Unable to parse MAC address: $_MAC"
+        exit 1
+    fi
+    if ! is_ip "$_IP"
+    then
+        perror "Unable to parse IP address: $_IP"
+        exit 1
+    fi
+    if ! is_ip "$_GW"
+    then
+        perror "Unable to parse GW address: $_GW"
+        exit 1
+    fi
+    if ! [[ "$_CIDR" =~ ^[0-9]+$ ]]
+    then
+        perror "Unable to parse CIDR prefix: $_CIDR"
+        exit 1
+    fi
+    if [[ $_CIDR -lt 24 ]] || [[ $_CIDR -gt 32 ]]
+    then
+        perror "CIDR/PREFIX should be in range 24-32: $_CIDR"
+        exit 1
+    fi
+    if ! is_ip_cidr "$_BOOTSUBNET"
+    then
+        perror "BOOT-SUBNET is not in IP/PREFIX: $_BOOTSUBNET"
+        exit 1
+    fi
+    _NETMASK=$(cidr_to_netmask "$_CIDR")
+    if [[ -z $_NETMASK ]]
+    then
+        perror "Unable to convert CIDR/PREFIX to NETMASK"
+        exit 1
+    fi
+    boot_subnet=$(cidr_subnet $_BOOTSUBNET)
+    boot_prefix=$(cidr_prefix $_BOOTSUBNET)
+    boot_subnet_long=$(ip2long $boot_subnet)
+    if ! [[ $boot_prefix =~ ^[0-9]+$ ]]
+    then
+        perror "Unable to parse BOOT CIDR prefix: $boot_prefix"
+        exit 1
+    fi
+
+    if [[ -z $boot_subnet_long ]]
+    then
+        perror "Unable to parse BOOT subnet address: $boot_subnet"
+        exit 1
+    fi
+
+    if [[ $boot_prefix -lt 24 ]] || [[ $boot_prefix -gt 30 ]]
+    then
+        perror "Incorrect BOOT subnet prefix (not in range 24-30): $boot_prefix"
+        exit 1
+    fi
+
+    boot_subnet_long=$(( $boot_subnet_long & $(cidr2long $boot_prefix) ))
+
+    _BOOTGW=$(long2ip $(( $boot_subnet_long + 1 )))
+    _BOOTIP=$(long2ip $(( $boot_subnet_long + 2 )))
+    _BOOTMASK=$(long2ip $(cidr2long $boot_prefix))
+    _BOOTNET=$(long2ip $boot_subnet_long)
+    _BOOTCIDR=$boot_prefix
+    _HOSTDIR="${DHCP_HOST}/${_MAC//:/\/}/"
+    _MACNAME="${_MAC//:/}"
+    mkdir -p "$_HOSTDIR" || true
+    exec >"${_HOSTDIR}${_MACNAME}.host"
+    if [[ $? -ne 0 ]]
+    then
+        perror "Unable to create host file: ${_HOSTDIR}${_MACNAME}.host"
+        exit 1
+    fi
+    echo "host O${_MACNAME} {"
+    echo "   hardware ethernet ${_MAC};"
+    echo "   fixed-address ${_IP};"
+    echo "   option routers ${_GW};"
+    if [[ $_CIDR -ne 31 ]]
+    then
+        echo "   option subnet-mask ${_NETMASK};"
+    else
+        echo "   if option vendor-class-identifier = \"MSFT 5.0\" {"
+        echo "      option subnet-mask 255.255.255.255;"
+        echo "   } else {"
+        echo "      option subnet-mask 255.255.255.254;"
+        echo "   }"
+    fi   
+    echo "}"
+
+    echo "host N${_MACNAME} {"
+	echo "   match if \"is-netboot\";"
+    echo "   hardware ethernet ${_MAC};"
+    echo "   fixed-address $_BOOTIP;"
+    echo "   option routers ${_BOOTGW};"
+    echo "   option subnet-mask ${_BOOTMASK};"
+    if [[ -n "$_BOOTFILE" ]]
+    then
+        echo "   next-server ${_BOOTSERVER};"
+        echo "   if option client-architecture = 00:07 {"
+        echo "       option bootfile-name \"/${_BOOTFILE}.efi\";"
+        echo "   } else if option client-architecture = 00:10 {"
+        echo "       option vendor-class-identifier \"HTTPClient\";"
+        echo "       option bootfile-name \"http://${_BOOTSERVER}/${_BOOTFILE}.efi\";"
+        echo "   } else if option client-architecture = 00:00 {"
+        echo "       option bootfile-name \"/${_BOOTFILE}.pxe\";"
+        echo "   }"
+    fi
+    echo "}"
+}
+
+perror() {
+    echo "$@" >&2
+}
+
+cidr_subnet() {
+    if is_ip_cidr "$1" 
+    then
+        echo "${1%%/*}"
+    fi
+}
+
+cidr_prefix() {
+    if is_ip_cidr "$1" 
+    then
+        echo "${1##*/}"
+    fi
+}
+
+
+cidr_to_netmask() {
+local _nm=$(cidr2long "$1")
+    if [[ -n $_nm ]]
+    then
+        echo $(long2ip $_nm)
+    fi
+}
+
+function ip2long {
+  if is_ip $1
+  then
+    local ip=$1;local o1;local o2;local o3;local o4
+    IFS="." read o1 o2 o3 o4 <<< "$ip"
+    echo -n $(( ($o1 << 24) + ($o2 << 16) + ($o3 << 8) + $o4))
+  fi
+}
+
+function long2ip {
+  if [[ $1 =~ ^[0-9]+$ ]]
+  then
+    echo -n "$((($1>>24)&255)).$((($1>>16)&255)).$((($1>>8)&255)).$(($1&255))"
+  fi
+}
+
+function cidr2long {
+  if [[ -n $1 && $1 =~ ^[0-9]+$ ]] && [[ $1 -ge 0 && $1 -le 32 ]]
+  then
+    echo  -n $((~((1<<(32-$1))-1)&0xffffffff))
+  fi
+}
+
+is_mac() {
+local _regex="^([0-9a-f][0-9a-f]:){5}[0-9a-f][0-9a-f]$"
+    if [[ $# -eq 1 ]] && [[ "${1,,}" =~ ${_regex} ]]
+    then
+        return 0
+    fi
+    return 1
+}
+
+is_ip()  {
+local _regex="^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
+    if [[ $# -eq 1 ]] && [[ "$1" =~ ${_regex} ]]
+    then
+        return 0
+    fi
+    return 1
+}
+
+is_ip_cidr() {
+local _regex="^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])/(3[012]|[12]?[0-9])$"
+    if [[ $# -eq 1 ]] && [[ "$1" =~ $_regex ]] 
+    then
+        return 0
+    fi
+    return 1
+}
+
+main "$@"
