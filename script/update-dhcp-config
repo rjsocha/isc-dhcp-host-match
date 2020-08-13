@@ -9,6 +9,8 @@ DHCP_HOST="/etc/dhcp/host"
 # boot-subnet:
 # boot-file:
 
+CLVL=4
+
 main() {
     while [[ $# -ne 0 ]]
     do
@@ -136,13 +138,14 @@ main() {
     _BOOTMASK=$(long2ip $(cidr2long $boot_prefix))
     _BOOTNET=$(long2ip $boot_subnet_long)
     _BOOTCIDR=$boot_prefix
-    _HOSTDIR="${DHCP_HOST}/${_MAC//:/\/}/"
+    _HOSTFILE="${DHCP_HOST}/$(cache_level $CLVL ${_MAC}).host"
     _MACNAME="${_MAC//:/}"
-    mkdir -p "$_HOSTDIR" || true
-    exec >"${_HOSTDIR}${_MACNAME}.host"
+    mkdir -p "$(dirname ${_HOSTFILE})" || true
+    echo -n "${_HOSTFILE}"
+    exec >"${_HOSTFILE}"
     if [[ $? -ne 0 ]]
     then
-        perror "Unable to create host file: ${_HOSTDIR}${_MACNAME}.host"
+        perror "Unable to create host file: ${_HOSTFILE}"
         exit 1
     fi
     echo "host O${_MACNAME} {"
@@ -186,6 +189,20 @@ perror() {
     echo "$@" >&2
 }
 
+cache_level() {
+local _level=$1 _mac=$2 p=0 c=""
+        _mac=${2//:/}
+        [[ $_level -gt 5 ]] && _level=5
+        while [[ $_level -gt 0 ]]
+        do
+                c="$c${_mac:$p:2}/"
+                ((_level--))
+                ((p++))
+                ((p++))
+        done
+        echo -n "$c${_mac:$p}"
+}
+
 cidr_subnet() {
     if is_ip_cidr "$1" 
     then
@@ -199,7 +216,6 @@ cidr_prefix() {
         echo "${1##*/}"
     fi
 }
-
 
 cidr_to_netmask() {
 local _nm=$(cidr2long "$1")

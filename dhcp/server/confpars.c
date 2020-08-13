@@ -486,8 +486,17 @@ int parse_statement (cfile, group, type, host_decl, declaration)
 					if(!(file_list=include_dir_list(NULL,recursive,base,suffix))) {
 						log_fatal("Out of memory...");
 					}
+					gettimeofday(&te, NULL);
 					int count=0;
 					INCLUDE_FILES *file=file_list->next;
+					while (file) {
+						file=file->next;
+						count++;
+					}
+					long long ms_info = te.tv_sec*1000LL + te.tv_usec/1000;
+					log_info("Include: total files collected %d in %lld ms",count,ms_info-ms_start);
+					count=0;
+					file=file_list->next;
 					while (file) {
 						INCLUDE_FILES *realase=NULL;
 						#ifdef DEBUG
@@ -507,7 +516,7 @@ int parse_statement (cfile, group, type, host_decl, declaration)
 					}
 					gettimeofday(&te, NULL);
 					long long ms_end = te.tv_sec*1000LL + te.tv_usec/1000;
-					log_info("Total files processed: %d in %lld ms",count,ms_end-ms_start);
+					log_info("Include: total files processed: %d in %lld ms",count,ms_end-ms_start);
 					free(base);
 				}
 				parse_semi (cfile);
