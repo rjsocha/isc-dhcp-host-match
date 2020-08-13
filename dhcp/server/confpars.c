@@ -490,7 +490,9 @@ int parse_statement (cfile, group, type, host_decl, declaration)
 					INCLUDE_FILES *file=file_list->next;
 					while (file) {
 						INCLUDE_FILES *realase=NULL;
+						#ifdef DEBUG
 						log_info("Including file:%s",file->file_path);
+						#endif
 						status = read_conf_file (file->file_path, group, type, 0);
 						if (status != ISC_R_SUCCESS) {
 							parse_warn (cfile, "%s: bad parse.", file->file_path);

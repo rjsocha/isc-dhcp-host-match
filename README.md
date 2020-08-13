@@ -12,6 +12,17 @@ PoC of some concept:
  * No DNS support in DHCPD
 
 
+This patch add new options for include directive:
+
+```
+	# Add all files from /etc/dhcp/host/ with extension .conf
+	include "/etc/dhcp/host/*.conf"
+
+
+	# Add all files from /etc/dhcp/host/ and sub folders with extension .conf
+	include "/etc/dhcp/host/*/*.conf"
+```
+
 This patch adds new keyword for hosts declartion:
 
 ```
