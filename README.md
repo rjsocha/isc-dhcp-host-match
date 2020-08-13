@@ -23,6 +23,24 @@ This patch add new options for include directive:
 	include "/etc/dhcp/host/*/*.conf"
 ```
 
+```
+Include: total files collected 103590 in 58 ms
+Include: total files processed: 103590 in 37063 ms
+
+So... toooo long (add precompiled binary token cache for config file for speed up?)
+
+But for my needs it's OK:
+
+# cold fs cache
+Include: total files collected 6000 in 5 ms
+Include: total files processed: 6000 in 1557 ms
+
+# with fs cache
+Include: total files collected 6000 in 3 ms
+Include: total files processed: 6000 in 255 ms
+
+```
+
 This patch adds new keyword for hosts declartion:
 
 ```
