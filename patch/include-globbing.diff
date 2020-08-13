@@ -1,0 +1,173 @@
+diff --git a/dhcp/includes/dhcpd.h b/dhcp/includes/dhcpd.h
+index 5c138377..5d56973c 100644
+--- a/dhcp/includes/dhcpd.h
++++ b/dhcp/includes/dhcpd.h
+@@ -53,6 +53,8 @@
+ #include <sys/mman.h>
+ #include <ctype.h>
+ #include <time.h>
++#include <dirent.h>
++#include <sys/time.h>
+ 
+ #include <net/if.h>
+ #undef FDDI
+diff --git a/dhcp/server/confpars.c b/dhcp/server/confpars.c
+index 21d1862b..578d7b45 100644
+--- a/dhcp/server/confpars.c
++++ b/dhcp/server/confpars.c
+@@ -42,6 +42,81 @@ static int parse_iaid_duid(struct parse *cfile, struct ia_xx** ia,
+ 			   u_int32_t *iaid, const char* file, int line);
+ #endif
+ 
++typedef struct INCLUDE_FILES {
++	struct INCLUDE_FILES *next;
++	struct INCLUDE_FILES *tail;
++	char *file_path;
++} INCLUDE_FILES;
++
++char *include_concat_path(char *base, char *name, int isDir) {
++	int base_len=strlen(base);
++	int name_len=strlen(name);
++	if(!base_len || !name_len) {
++		return NULL;
++	}
++	// extra space for '/' at the end
++	char *cp=calloc(strlen(base)+strlen(name)+3,1);
++	if(cp) {
++		strcat(cp,base);
++		if(base[base_len-1] != '/') {
++			strcat(cp,"/");
++		}
++		strcat(cp,name);
++		if(isDir && cp[name_len-1] != '/') {
++			strcat(cp,"/");
++		}
++	}
++	return cp;
++}
++
++INCLUDE_FILES *include_dir_list(INCLUDE_FILES *head,int recursive,char *dir_name,char *suffix) {
++	DIR *dir;
++	struct dirent *entry;
++
++	if(head==NULL) {
++		if(!(head=calloc(sizeof(INCLUDE_FILES),1))) {
++			return NULL;
++		}
++		head->next=NULL;
++		head->tail=head;
++	}
++	if((dir=opendir(dir_name))) {
++		while((entry=readdir(dir))) {
++			char *n = entry->d_name;
++			if(entry->d_type==DT_DIR && recursive) {
++				if(!strcmp(n,".") || !strcmp(n,".."))
++					continue;
++				char *new_dir=NULL;
++				if(!(new_dir=include_concat_path(dir_name,n,1))) {
++					log_fatal("Out of memory...");
++				}
++				include_dir_list(head,recursive,new_dir,suffix);
++				free(new_dir);
++			} else if ( entry->d_type==DT_REG) {
++				char *name=NULL;
++				int sl = strlen(suffix);
++				if(strlen(n)>=sl && !strcmp(n+strlen(n)-sl,suffix)) {
++					name=include_concat_path(dir_name,n,0);
++					if(name) {
++						INCLUDE_FILES *new;
++						if((new=calloc(sizeof(INCLUDE_FILES),1))) {
++							head->tail->next=new;
++							head->tail=new;
++							head->tail->file_path=name;
++						} else {
++							log_fatal("Out of memory...");
++						}
++					} else {
++						log_fatal("Out of memory...");
++					}
++				}
++			}
++		}
++		closedir(dir);
++	}
++	return head;
++}
++
+ #if defined (TRACING)
+ trace_type_t *trace_readconf_type;
+ trace_type_t *trace_readleases_type;
+@@ -383,10 +458,69 @@ int parse_statement (cfile, group, type, host_decl, declaration)
+ 			parse_warn (cfile, "filename string expected.");
+ 			skip_to_semi (cfile);
+ 		} else {
+-			status = read_conf_file (val, group, type, 0);
+-			if (status != ISC_R_SUCCESS)
+-				parse_warn (cfile, "%s: bad parse.", val);
+-			parse_semi (cfile);
++			char *p=NULL;
++			char *suffix=NULL;
++			char *base=NULL;
++			int recursive = 0;
++			if( (p=strstr(val,"*/*")) != NULL ) {
++				suffix = p+3;
++			} else if( (p=strstr(val,"*")) != NULL ) {
++				suffix = p+1;
++			}
++			if(suffix==NULL) {
++				status = read_conf_file (val, group, type, 0);
++				if (status != ISC_R_SUCCESS)
++					parse_warn (cfile, "%s: bad parse.", val);
++				parse_semi (cfile);
++			} else {
++				if(*val != '/') {
++					parse_warn (cfile, "%s: full path required", val);
++				} else {
++					base = strndup(val,p-val);
++					recursive=suffix-p-1;
++					log_info("Including files from %s",val);
++					struct timeval te;
++					gettimeofday(&te, NULL);
++					long long ms_start = te.tv_sec*1000LL + te.tv_usec/1000;
++					INCLUDE_FILES *file_list;
++					if(!(file_list=include_dir_list(NULL,recursive,base,suffix))) {
++						log_fatal("Out of memory...");
++					}
++					gettimeofday(&te, NULL);
++					int count=0;
++					INCLUDE_FILES *file=file_list->next;
++					while (file) {
++						file=file->next;
++						count++;
++					}
++					long long ms_info = te.tv_sec*1000LL + te.tv_usec/1000;
++					log_info("Include: total files collected %d in %lld ms",count,ms_info-ms_start);
++					count=0;
++					file=file_list->next;
++					while (file) {
++						INCLUDE_FILES *realase=NULL;
++						#ifdef DEBUG
++						log_info("Including file:%s",file->file_path);
++						#endif
++						status = read_conf_file (file->file_path, group, type, 0);
++						if (status != ISC_R_SUCCESS) {
++							parse_warn (cfile, "%s: bad parse.", file->file_path);
++							break;
++							// memory leak here - don't care at this moment
++						}
++						realase=file;
++						file=file->next;
++						free(realase->file_path);
++						free(realase);
++						count++;
++					}
++					gettimeofday(&te, NULL);
++					long long ms_end = te.tv_sec*1000LL + te.tv_usec/1000;
++					log_info("Include: total files processed: %d in %lld ms",count,ms_end-ms_start);
++					free(base);
++				}
++				parse_semi (cfile);
++			}
+ 		}
+ 		return 1;
+ 		
