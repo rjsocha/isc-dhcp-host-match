@@ -73,6 +73,7 @@ void log_fatal (const char * fmt, ... )
 	  IGNORE_RET (write (STDERR_FILENO, "\n", 1));
   }
 
+/*
   log_error ("%s", "");
   log_error ("If you think you have received this message due to a bug rather");
   log_error ("than a configuration issue please read the section on submitting");
@@ -81,6 +82,7 @@ void log_fatal (const char * fmt, ... )
   log_error ("process and the information we find helpful for debugging.");
   log_error ("%s", "");
   log_error ("exiting.");
+*/
 
   if (log_cleanup)
 	  (*log_cleanup) ();

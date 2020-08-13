@@ -53,6 +53,8 @@
 #include <sys/mman.h>
 #include <ctype.h>
 #include <time.h>
+#include <dirent.h>
+#include <sys/time.h>
 
 #include <net/if.h>
 #undef FDDI
